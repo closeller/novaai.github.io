@@ -1,0 +1,450 @@
+// DOM Elements
+const chatMessages = document.getElementById('chat-messages');
+const userInput = document.getElementById('user-input');
+const sendButton = document.getElementById('send-btn');
+const voiceButton = document.getElementById('voice-btn');
+const themeToggle = document.getElementById('theme-toggle');
+const clearChat = document.getElementById('clear-chat');
+const typingIndicator = document.getElementById('typing-indicator');
+
+// State
+let isListening = false;
+let isSpeaking = false;
+const notes = JSON.parse(localStorage.getItem('notes') || '[]');
+const tasks = JSON.parse(localStorage.getItem('tasks') || '[]');
+const chatHistory = JSON.parse(localStorage.getItem('chatHistory') || '[]');
+const ASSISTANT_NAME = 'Nova';
+
+// Time expressions for natural language processing
+const timeExpressions = {
+    'tomorrow': () => {
+        const date = new Date();
+        date.setDate(date.getDate() + 1);
+        return date;
+    },
+    'next week': () => {
+        const date = new Date();
+        date.setDate(date.getDate() + 7);
+        return date;
+    },
+    'tonight': () => {
+        const date = new Date();
+        date.setHours(20, 0, 0, 0);
+        return date;
+    },
+    'this evening': () => {
+        const date = new Date();
+        date.setHours(18, 0, 0, 0);
+        return date;
+    }
+};
+
+// Assistant personality traits and responses
+const personality = {
+    greeting: [
+        `Hi! I'm ${ASSISTANT_NAME}, your AI assistant. How can I brighten your day?`,
+        `Hello! ${ASSISTANT_NAME} here, ready to help!`,
+        `Hey there! I'm ${ASSISTANT_NAME}, your friendly AI companion!`
+    ],
+    farewell: [
+        "Goodbye! Don't hesitate to come back if you need anything!",
+        "See you later! Have a wonderful day!",
+        "Take care! I'll be here when you need me!"
+    ],
+    confusion: [
+        "I didn't quite catch that. Could you rephrase it?",
+        "Hmm, that's a bit unclear to me. Want to try saying it differently?",
+        "I'm still learning! Could you explain that another way?"
+    ],
+    acknowledgment: [
+        "Got it!",
+        "I'm on it!",
+        "Leave it to me!",
+        "Consider it done!"
+    ],
+    taskAdded: [
+        "✅ Task added to your list!",
+        "📝 I've added that to your tasks!",
+        "🎯 Task recorded successfully!"
+    ]
+};
+
+// Quotes array with categories
+const quotes = {
+    motivation: [
+        "The only way to do great work is to love what you do. - Steve Jobs",
+        "Everything you can imagine is real. - Pablo Picasso",
+        "What you do today can improve all your tomorrows. - Ralph Marston"
+    ],
+    success: [
+        "Success is not final, failure is not fatal: it is the courage to continue that counts. - Winston Churchill",
+        "The best way to predict the future is to create it. - Peter Drucker"
+    ],
+    innovation: [
+        "Innovation distinguishes between a leader and a follower. - Steve Jobs",
+        "Stay hungry, stay foolish. - Steve Jobs"
+    ],
+    dreams: [
+        "The future belongs to those who believe in the beauty of their dreams. - Eleanor Roosevelt"
+    ]
+};
+
+// Theme handling
+function toggleTheme() {
+    const isDark = document.body.getAttribute('data-theme') === 'dark';
+    document.body.setAttribute('data-theme', isDark ? 'light' : 'dark');
+    themeToggle.innerHTML = `<i class="fas fa-${isDark ? 'moon' : 'sun'}"></i>`;
+    localStorage.setItem('theme', isDark ? 'light' : 'dark');
+    speak(isDark ? 'Switching to light mode' : 'Switching to dark mode');
+}
+
+// Initialize theme
+const savedTheme = localStorage.getItem('theme') || 'light';
+document.body.setAttribute('data-theme', savedTheme);
+themeToggle.innerHTML = `<i class="fas fa-${savedTheme === 'dark' ? 'sun' : 'moon'}"></i>`;
+
+// Voice synthesis setup with better voice selection
+function speak(text) {
+    if ('speechSynthesis' in window && !isSpeaking) {
+        const msg = new SpeechSynthesisUtterance(text);
+        msg.volume = 1;
+        msg.rate = 1;
+        msg.pitch = 1;
+        
+        // Use a more natural voice if available
+        const voices = speechSynthesis.getVoices();
+        const preferredVoice = voices.find(voice => 
+            voice.name.includes('Samantha') || 
+            voice.name.includes('Female') ||
+            voice.name.includes('Google UK English Female')
+        );
+        if (preferredVoice) msg.voice = preferredVoice;
+
+        isSpeaking = true;
+        msg.onend = () => { isSpeaking = false; };
+        speechSynthesis.speak(msg);
+    }
+}
+
+// Message handling with animations and typing indicator
+function addMessage(text, isUser = false) {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${isUser ? 'user' : 'assistant'}`;
+    messageDiv.innerHTML = `<div class="message-content">${text}</div>`;
+    
+    // Add animation classes
+    messageDiv.style.opacity = '0';
+    messageDiv.style.transform = 'translateY(20px)';
+    
+    chatMessages.appendChild(messageDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    // Save to chat history
+    chatHistory.push({ text, isUser, timestamp: new Date().toISOString() });
+    localStorage.setItem('chatHistory', JSON.stringify(chatHistory.slice(-50))); // Keep last 50 messages
+
+    // Trigger animation
+    setTimeout(() => {
+        messageDiv.style.transition = 'all 0.3s ease-out';
+        messageDiv.style.opacity = '1';
+        messageDiv.style.transform = 'translateY(0)';
+    }, 50);
+
+    // Speak assistant messages
+    if (!isUser) {
+        speak(text.replace(/<[^>]*>/g, '')); // Remove HTML tags for speech
+    }
+}
+
+// Task management with natural language processing
+function parseDateTime(text) {
+    const lowerText = text.toLowerCase();
+    
+    // Check for specific time expressions
+    for (const [expression, getDate] of Object.entries(timeExpressions)) {
+        if (lowerText.includes(expression)) {
+            return getDate();
+        }
+    }
+
+    // Check for "at [time]" pattern
+    const timeMatch = lowerText.match(/at (\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+    if (timeMatch) {
+        const date = new Date();
+        let hours = parseInt(timeMatch[1]);
+        const minutes = timeMatch[2] ? parseInt(timeMatch[2]) : 0;
+        const meridiem = timeMatch[3]?.toLowerCase();
+
+        if (meridiem === 'pm' && hours < 12) hours += 12;
+        if (meridiem === 'am' && hours === 12) hours = 0;
+
+        date.setHours(hours, minutes, 0, 0);
+        return date;
+    }
+
+    // Default to tomorrow
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(9, 0, 0, 0);
+    return tomorrow;
+}
+
+function addTask(taskText, dueDate) {
+    const task = {
+        text: taskText,
+        due: dueDate.toISOString(),
+        completed: false,
+        id: Date.now(),
+        priority: taskText.toLowerCase().includes('urgent') ? 'high' : 'normal'
+    };
+    
+    tasks.push(task);
+    localStorage.setItem('tasks', JSON.stringify(tasks));
+    return task;
+}
+
+function completeTask(taskId) {
+    const task = tasks.find(t => t.id === taskId);
+    if (task) {
+        task.completed = true;
+        localStorage.setItem('tasks', JSON.stringify(tasks));
+        return true;
+    }
+    return false;
+}
+
+function formatTasks() {
+    if (tasks.length === 0) return "You don't have any tasks yet.";
+    
+    const pendingTasks = tasks.filter(task => !task.completed);
+    if (pendingTasks.length === 0) return "All tasks completed! 🎉";
+
+    const now = new Date();
+    const sortedTasks = pendingTasks.sort((a, b) => new Date(a.due) - new Date(b.due));
+    
+    return sortedTasks.map(task => {
+        const dueDate = new Date(task.due);
+        const isOverdue = dueDate < now;
+        const dueText = isOverdue ? '⚠️ Overdue' : formatRelativeTime(dueDate);
+        const priorityIcon = task.priority === 'high' ? '🔴' : '🔵';
+        
+        return `${priorityIcon} ${task.text}\n   📅 ${dueText}`;
+    }).join('\n\n');
+}
+
+function formatRelativeTime(date) {
+    const now = new Date();
+    const diff = date - now;
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    
+    if (days === 0) return `Today at ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    if (days === 1) return `Tomorrow at ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    if (days < 7) return `In ${days} days`;
+    return date.toLocaleDateString();
+}
+
+// Enhanced command processing
+function processCommand(command) {
+    const lowerCommand = command.toLowerCase().trim();
+
+    // Show typing indicator
+    typingIndicator.style.display = 'flex';
+    
+    // Helper function for random responses
+    const getRandomResponse = (array) => array[Math.floor(Math.random() * array.length)];
+
+    // Process after a small delay to show typing indicator
+    setTimeout(() => {
+        let response;
+
+        // Basic greetings
+        if (lowerCommand.includes('hello') || lowerCommand.includes('hi')) {
+            response = getRandomResponse(personality.greeting);
+        }
+        // Time
+        else if (lowerCommand.includes('time')) {
+            const now = new Date();
+            response = `It's ${now.toLocaleTimeString()}. ${now.getHours() < 12 ? 'Good morning!' : now.getHours() < 18 ? 'Good afternoon!' : 'Good evening!'}`;
+        }
+        // Quotes
+        else if (lowerCommand.includes('quote')) {
+            let category = 'motivation';
+            if (lowerCommand.includes('success')) category = 'success';
+            if (lowerCommand.includes('innovation')) category = 'innovation';
+            if (lowerCommand.includes('dream')) category = 'dreams';
+            
+            response = getRandomResponse(quotes[category]);
+        }
+        // Tasks
+        else if (lowerCommand.includes('remind me to') || lowerCommand.includes('add task')) {
+            const taskText = command
+                .replace(/remind me to|add task|:|about/gi, '')
+                .trim();
+            
+            if (taskText) {
+                const dueDate = parseDateTime(command);
+                const task = addTask(taskText, dueDate);
+                response = `${getRandomResponse(personality.taskAdded)}\n"${task.text}" due ${formatRelativeTime(new Date(task.due))}`;
+            } else {
+                response = "Please specify what you'd like me to remind you about.";
+            }
+        }
+        // Show tasks
+        else if (lowerCommand.includes('show tasks') || lowerCommand.includes('list tasks')) {
+            response = `📋 Here are your tasks:\n\n${formatTasks()}`;
+        }
+        // Notes
+        else if (lowerCommand.includes('take a note')) {
+            const noteText = command.replace(/take a note|:|about/gi, '').trim();
+            if (noteText) {
+                notes.push({
+                    text: noteText,
+                    timestamp: new Date().toISOString()
+                });
+                localStorage.setItem('notes', JSON.stringify(notes));
+                response = `✅ Note saved: "${noteText}"`;
+            } else {
+                response = "Please provide some text for the note.";
+            }
+        }
+        // Show notes
+        else if (lowerCommand.includes('show notes')) {
+            if (notes.length === 0) response = "You don't have any notes yet.";
+            else {
+                const notesList = notes.map(note => 
+                    `📝 ${note.text}\n   📅 ${new Date(note.timestamp).toLocaleDateString()}`
+                ).join('\n\n');
+                response = `Here are your notes:\n\n${notesList}`;
+            }
+        }
+        // Clear notes
+        else if (lowerCommand.includes('clear notes')) {
+            notes.length = 0;
+            localStorage.setItem('notes', JSON.stringify(notes));
+            response = "All notes have been cleared.";
+        }
+        // Clear chat
+        else if (lowerCommand.includes('clear chat')) {
+            chatMessages.innerHTML = '';
+            chatHistory.length = 0;
+            localStorage.setItem('chatHistory', JSON.stringify([]));
+            response = "Chat history cleared.";
+        }
+        // Help
+        else if (lowerCommand.includes('help') || lowerCommand.includes('what can you do')) {
+            response = `I can help you with several things:
+            • Tell you the time
+            • Share inspirational quotes (try "quote about success")
+            • Take and manage notes
+            • Set task reminders with natural language
+            • Toggle dark/light mode
+            • Clear chat history
+            
+            Try phrases like:
+            • "Remind me to buy groceries tomorrow at 5pm"
+            • "Take a note: Call mom this weekend"
+            • "Show my tasks"
+            • "Give me a quote about success"`;
+        }
+        // Fallback
+        else {
+            response = getRandomResponse(personality.confusion);
+        }
+
+        // Hide typing indicator and show response
+        typingIndicator.style.display = 'none';
+        addMessage(response);
+    }, 1000); // Simulate typing delay
+}
+
+// Voice recognition setup
+let recognition = null;
+if ('webkitSpeechRecognition' in window) {
+    recognition = new webkitSpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+
+    recognition.onstart = () => {
+        addMessage("I'm listening...");
+    };
+
+    recognition.onresult = (event) => {
+        const text = event.results[0][0].transcript;
+        addMessage(text, true);
+        handleInput(text);
+    };
+
+    recognition.onend = () => {
+        isListening = false;
+        voiceButton.innerHTML = '<i class="fas fa-microphone"></i>';
+    };
+
+    recognition.onerror = (event) => {
+        addMessage("Sorry, I couldn't hear that. Please try again.");
+        isListening = false;
+        voiceButton.innerHTML = '<i class="fas fa-microphone"></i>';
+    };
+}
+
+function toggleVoiceInput() {
+    if (!recognition) {
+        addMessage("Sorry, voice recognition is not supported in your browser.");
+        return;
+    }
+
+    if (isListening) {
+        recognition.stop();
+    } else {
+        recognition.start();
+        isListening = true;
+        voiceButton.innerHTML = '<i class="fas fa-microphone-slash"></i>';
+    }
+}
+
+// Input handling
+function handleInput(text) {
+    processCommand(text);
+}
+
+function handleSubmit() {
+    const text = userInput.value.trim();
+    if (text) {
+        addMessage(text, true);
+        handleInput(text);
+        userInput.value = '';
+    }
+}
+
+// Event listeners
+sendButton.addEventListener('click', handleSubmit);
+userInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') handleSubmit();
+});
+voiceButton.addEventListener('click', toggleVoiceInput);
+themeToggle.addEventListener('click', toggleTheme);
+clearChat.addEventListener('click', () => handleInput('clear chat'));
+
+// Initialize with welcome message and restore chat history
+document.addEventListener('DOMContentLoaded', () => {
+    // Load available voices for speech synthesis
+    speechSynthesis.onvoiceschanged = () => {
+        const voices = speechSynthesis.getVoices();
+        console.log('Available voices loaded:', voices.length);
+    };
+
+    // Restore chat history
+    if (chatHistory.length > 0) {
+        chatHistory.forEach(msg => addMessage(msg.text, msg.isUser));
+    } else {
+        const welcomeMessage = `Hello! I'm ${ASSISTANT_NAME}, your AI assistant. I can help you with:
+        • Telling the time
+        • Sharing inspirational quotes
+        • Taking and managing notes
+        • Setting task reminders
+        • Toggling dark/light mode
+        
+        Try saying "What can you do?" for more information!`;
+        
+        addMessage(welcomeMessage);
+    }
+}); 
